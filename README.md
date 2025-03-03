@@ -1,0 +1,2 @@
+# mcp-configuration-manager
+ 
