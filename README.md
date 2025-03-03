@@ -4,6 +4,8 @@ A powerful desktop application for managing Model Context Protocol (MCP) server 
 
 ![MCP Configuration Manager](SCREENSHOTS/2025-03-03_16-49-32.png)
 
+> **Note:** This project is related to the [MCP Workflows Marketplace](https://github.com/Cam10001110101/mcp-workflows-marketplace) (link may be unavailable).
+
 ## What is MCP?
 
 The Model Context Protocol (MCP) enables communication between AI systems and locally running servers that provide additional tools and resources to extend AI capabilities. This configuration manager helps you create, edit, and manage MCP server configurations for Claude and other MCP-compatible AI applications.
