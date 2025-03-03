@@ -172,3 +172,23 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Screenshots
+
+### Main Interface with Profiles
+![Profiles Main View](SCREENSHOTS/profiles-main.png)
+
+### Creating a New Profile
+![New Profile Dialog](SCREENSHOTS/new-profile.png)
+
+### Configuration Settings
+![Configuration Settings](SCREENSHOTS/config-settings.png)
+
+### JSON Syntax Editor
+![JSON Syntax Editor](SCREENSHOTS/json-syntax-fixer.png)
+
+### Built-in Inspector
+![Built-in Inspector](SCREENSHOTS/insptector-built-in.png)
+
+### MCP Configuration Structure
+![MCP Configuration Structure](SCREENSHOTS/sqlite-mcp-config.png)
