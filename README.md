@@ -4,7 +4,7 @@ A powerful desktop application for managing Model Context Protocol (MCP) server 
 
 ![MCP Configuration Manager](SCREENSHOTS/2025-03-03_16-49-32.png)
 
-> **Note:** This project is related to the [MCP Workflows Marketplace](https://github.com/Cam10001110101/mcp-workflows-marketplace) (link may be unavailable).
+> **Note:** This project is related to the [MCP Workflows Marketplace](https://github.com/Cam10001110101/mcp-workflows-marketplace)
 
 ## What is MCP?
 
