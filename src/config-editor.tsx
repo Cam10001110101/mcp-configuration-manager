@@ -52,6 +52,7 @@ const ConfigEditor: React.FC = () => {
   const [searchText, setSearchText] = useState<string>('');
   const [editingServerIndex, setEditingServerIndex] = useState<number | null>(null);
   const [tempServer, setTempServer] = useState<Component | null>(null);
+  const [showEditModal, setShowEditModal] = useState<boolean>(false);
 
   // Load configuration from profile (used when switching profiles)
   const handleProfileSwitch = useCallback(async () => {
@@ -90,6 +91,9 @@ const ConfigEditor: React.FC = () => {
 
       console.log('Configuration loaded:', result);
       const { filePath, content } = result;
+      
+      // Update the current file path to ensure it matches the active profile
+      setCurrentFilePath(filePath);
       
       // Try to parse the content as JSON to see if it's valid
       try {
@@ -149,6 +153,12 @@ const ConfigEditor: React.FC = () => {
       // Load the configuration after a short delay to ensure settings are loaded
       const timer = setTimeout(() => {
         handleProfileSwitch();
+        
+        // Auto-show the raw config after loading for testing
+        setTimeout(() => {
+          console.log('Auto-showing raw config for testing');
+          handleShowRawConfig();
+        }, 2000);
       }, 500);
       
       return () => clearTimeout(timer);
@@ -266,28 +276,34 @@ const ConfigEditor: React.FC = () => {
 
   const handleShowRawConfig = async () => {
     try {
+      let configToShow = '';
+      
       // If we have a current file path, try to load the config directly from the file
       if (currentFilePath && isElectronAvailable) {
         console.log('Loading config from file for raw display:', currentFilePath);
         const result = await window.electron.loadConfigByPath(currentFilePath);
-        if (result && result.content) {
-          console.log('Loaded config from file for raw display');
-          setRawConfigText(result.content);
-        } else {
-          // Fallback to generating from components if file load fails
-          console.log('Falling back to generated config for raw display');
-          setRawConfigText(generateRawConfigText());
+        if (result && result.content && result.content.trim()) {
+          console.log('Loaded config from file for raw display:', result.content);
+          configToShow = result.content;
         }
-      } else {
-        // No file path, generate from components
-        console.log('Generating config for raw display from components');
-        setRawConfigText(generateRawConfigText());
       }
+      
+      // If we couldn't load from file or it was empty, generate from components
+      if (!configToShow) {
+        configToShow = generateRawConfigText();
+        console.log('Generated config from components:', configToShow);
+      }
+      
+      // Set the config text and show the modal
+      console.log('Setting raw config text to:', configToShow);
+      setRawConfigText(configToShow);
       setShowRawConfig(true);
     } catch (err) {
       console.error('Error preparing raw config:', err);
-      // Fallback to generating from components if any error occurs
-      setRawConfigText(generateRawConfigText());
+      // Ensure we have a fallback config
+      const fallbackConfig = generateRawConfigText();
+      console.log('Using fallback config due to error:', fallbackConfig);
+      setRawConfigText(fallbackConfig);
       setShowRawConfig(true);
     }
   };
@@ -316,7 +332,18 @@ const ConfigEditor: React.FC = () => {
   };
 
   const toggleEditServer = (index: number) => {
-    setEditingServerIndex(editingServerIndex === index ? null : index);
+    if (editingServerIndex === index) {
+      // If clicking the same server again, close the edit modal
+      setEditingServerIndex(null);
+      setShowEditModal(false);
+      setTempServer(null);
+    } else {
+      // Set up the temp server with the current values
+      const component = config.components[index];
+      setTempServer({...component});
+      setEditingServerIndex(index);
+      setShowEditModal(true);
+    }
   };
 
   const handleLaunchInspector = async (serverName: string, serverConfig: McpServerConfig) => {
@@ -342,6 +369,20 @@ const ConfigEditor: React.FC = () => {
         const newStatus = { serverName, url: result.url, running: true };
         setSelectedInspector(newStatus);
         setShowInspectorModal(true);
+        
+        // Open the inspector URL in a browser window
+        try {
+          console.log(`Opening inspector URL: ${result.url}`);
+          const openResult = await window.electron.openInspectorUrl(result.url);
+          console.log(`Open URL result:`, openResult);
+          
+          if (!openResult.success) {
+            console.warn(`Failed to open URL automatically, showing modal for manual opening`);
+          }
+        } catch (openErr) {
+          console.error(`Error opening inspector URL:`, openErr);
+          // Continue even if opening the URL fails, as the user can still open it from the modal
+        }
       } else {
         throw new Error(result.error || 'Unknown error');
       }
@@ -377,6 +418,280 @@ const ConfigEditor: React.FC = () => {
         }}
       />
 
+      {/* Server Edit Modal */}
+      {showEditModal && tempServer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#222222] p-6 rounded-lg w-full max-w-2xl">
+            <h2 className="text-xl font-bold mb-4">Edit Server: {tempServer.name}</h2>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-1">Server Name</label>
+              <input
+                type="text"
+                value={tempServer.name}
+                onChange={(e) => setTempServer({...tempServer, name: e.target.value})}
+                className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded"
+              />
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-1">Command</label>
+              <input
+                type="text"
+                value={tempServer.command}
+                onChange={(e) => setTempServer({...tempServer, command: e.target.value})}
+                className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded"
+              />
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-1">Arguments</label>
+              {tempServer.args.map((arg, index) => (
+                <div key={index} className="flex mb-2">
+                  <input
+                    type="text"
+                    value={arg}
+                    onChange={(e) => {
+                      const newArgs = [...tempServer.args];
+                      newArgs[index] = e.target.value;
+                      setTempServer({...tempServer, args: newArgs});
+                    }}
+                    className="flex-grow p-2 bg-gray-700 text-white border border-gray-600 rounded-l"
+                  />
+                  <button
+                    onClick={() => {
+                      const newArgs = tempServer.args.filter((_, i) => i !== index);
+                      setTempServer({...tempServer, args: newArgs});
+                    }}
+                    className="px-3 bg-red-700 text-white rounded-r hover:bg-red-600"
+                  >
+                    -
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  setTempServer({...tempServer, args: [...tempServer.args, '']});
+                }}
+                className="mt-2 px-3 py-1 bg-blue-700 text-white rounded hover:bg-blue-600"
+              >
+                + Add Argument
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-300 mb-1">Environment Variables</label>
+              {Object.entries(tempServer.env || {}).map(([key, value], index) => (
+                <div key={index} className="flex mb-2">
+                  <input
+                    type="text"
+                    value={key}
+                    onChange={(e) => {
+                      const newEnv = {...tempServer.env};
+                      const oldValue = newEnv[key];
+                      delete newEnv[key];
+                      newEnv[e.target.value] = oldValue;
+                      setTempServer({...tempServer, env: newEnv});
+                    }}
+                    className="w-1/3 p-2 bg-gray-700 text-white border border-gray-600 rounded-l"
+                    placeholder="Key"
+                  />
+                  <input
+                    type="text"
+                    value={value as string}
+                    onChange={(e) => {
+                      const newEnv = {...tempServer.env};
+                      newEnv[key] = e.target.value;
+                      setTempServer({...tempServer, env: newEnv});
+                    }}
+                    className="flex-grow p-2 bg-gray-700 text-white border-l-0 border-r-0 border-gray-600"
+                    placeholder="Value"
+                  />
+                  <button
+                    onClick={() => {
+                      const newEnv = {...tempServer.env};
+                      delete newEnv[key];
+                      setTempServer({...tempServer, env: newEnv});
+                    }}
+                    className="px-3 bg-red-700 text-white rounded-r hover:bg-red-600"
+                  >
+                    -
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  const newEnv = {...tempServer.env};
+                  newEnv[`ENV_VAR_${Object.keys(newEnv).length}`] = '';
+                  setTempServer({...tempServer, env: newEnv});
+                }}
+                className="mt-2 px-3 py-1 bg-blue-700 text-white rounded hover:bg-blue-600"
+              >
+                + Add Environment Variable
+              </button>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingServerIndex(null);
+                  setTempServer(null);
+                }}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  // Save the changes
+                  const newComponents = [...config.components];
+                  
+                  if (editingServerIndex === -1) {
+                    // Adding a new server
+                    newComponents.push(tempServer);
+                  } else {
+                    // Editing an existing server
+                    newComponents[editingServerIndex] = tempServer;
+                  }
+                  
+                  setConfig({components: newComponents});
+                  setShowEditModal(false);
+                  setEditingServerIndex(null);
+                  setTempServer(null);
+                  
+                  // Generate and save the raw config
+                  const rawConfig = JSON.stringify({
+                    mcpServers: newComponents.reduce((acc, component) => {
+                      acc[component.name] = {
+                        command: component.command,
+                        args: component.args.filter(arg => arg.length > 0),
+                        ...(component.env && Object.keys(component.env).length > 0 ? { env: component.env } : {})
+                      };
+                      return acc;
+                    }, {} as Record<string, McpServerConfig>)
+                  }, null, 2);
+                  
+                  // Save to file if we have a path
+                  if (currentFilePath && isElectronAvailable) {
+                    window.electron.saveConfig(rawConfig, currentFilePath)
+                      .then(() => {
+                        setMessage(`✓ Server configuration saved successfully`);
+                      })
+                      .catch((err) => {
+                        console.error('Error saving configuration:', err);
+                        setMessage(`❌ Error saving configuration: ${err.message}`);
+                      });
+                  }
+                }}
+                className="px-4 py-2 bg-blue-700 text-white rounded hover:bg-blue-600"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inspector Modal */}
+      {showInspectorModal && selectedInspector && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#222222] p-6 rounded-lg w-full max-w-2xl">
+            <h2 className="text-xl font-bold mb-4">Inspector: {selectedInspector.serverName}</h2>
+            
+            <div className="mb-6">
+              {selectedInspector.url.startsWith('chrome-devtools://') ? (
+                <div>
+                  <p className="text-yellow-300 mb-2">⚠️ This is a Chrome DevTools URL that can only be opened in Chrome/Edge</p>
+                  <p className="text-gray-300 mb-2">To use this inspector:</p>
+                  <ol className="list-decimal list-inside text-gray-300 mb-4 pl-4">
+                    <li className="mb-1">Copy this URL: <code className="bg-gray-700 px-2 py-1 rounded">{selectedInspector.url}</code></li>
+                    <li className="mb-1">Open Chrome or Edge browser</li>
+                    <li className="mb-1">Paste the URL in the address bar</li>
+                  </ol>
+                  <div className="flex mb-4">
+                    <button
+                      onClick={() => {
+                        // Copy URL to clipboard
+                        navigator.clipboard.writeText(selectedInspector.url)
+                          .then(() => {
+                            setMessage("✓ URL copied to clipboard");
+                          })
+                          .catch(err => {
+                            console.error("Failed to copy URL: ", err);
+                            setMessage("❌ Failed to copy URL");
+                          });
+                      }}
+                      className="px-3 py-1 bg-blue-700 text-white rounded hover:bg-blue-600 mr-3"
+                    >
+                      Copy URL
+                    </button>
+                    <button
+                      onClick={() => {
+                        window.electron.openInspectorUrl(selectedInspector.url);
+                      }}
+                      className="px-3 py-1 bg-blue-700 text-white rounded hover:bg-blue-600"
+                    >
+                      Try to Open in Chrome
+                    </button>
+                  </div>
+                  <p className="text-gray-400 text-sm">Note: The Node.js debugger is running on port 9229. This is not a web server you can access in a browser by typing localhost:9229.</p>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-gray-300 mb-2">Inspector URL: <a href="#" onClick={(e) => {
+                    e.preventDefault();
+                    window.electron.openInspectorUrl(selectedInspector.url);
+                  }} className="text-blue-400 hover:underline">{selectedInspector.url}</a></p>
+                  <button
+                    onClick={() => {
+                      window.electron.openInspectorUrl(selectedInspector.url);
+                    }}
+                    className="px-3 py-1 bg-blue-700 text-white rounded hover:bg-blue-600"
+                  >
+                    Open in Browser
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end space-x-3 border-t border-gray-700 pt-4">
+              <button
+                onClick={() => {
+                  setShowInspectorModal(false);
+                  setSelectedInspector(null);
+                }}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  window.electron.stopInspector(selectedInspector.serverName)
+                    .then((result) => {
+                      if (result.success) {
+                        setInspectorStatus(prev => prev.filter(status => status.serverName !== selectedInspector.serverName));
+                        setShowInspectorModal(false);
+                        setSelectedInspector(null);
+                        setMessage(`✓ Inspector for ${selectedInspector.serverName} stopped successfully`);
+                      } else {
+                        throw new Error(result.error || 'Unknown error');
+                      }
+                    })
+                    .catch((err) => {
+                      console.error('Error stopping inspector:', err);
+                      setMessage(`❌ Error stopping inspector: ${err.message}`);
+                    });
+                }}
+                className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-600"
+              >
+                Stop Inspector
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Raw Config Modal */}
       <RawConfigModal
         isOpen={showRawConfig}
@@ -395,6 +710,27 @@ const ConfigEditor: React.FC = () => {
             
             // Save to file
             await window.electron.saveConfig(configText, currentFilePath);
+            
+            // Also save to the current profile in the database
+            try {
+              // Get all profiles to find the current one
+              const profiles = await window.electron.getAllProfiles();
+              
+              // Find the profile that matches the current config path
+              const currentProfile = profiles.find(p => p.config_path === configPath);
+              
+              if (currentProfile) {
+                console.log('Saving configuration to profile:', currentProfile.id);
+                // Save the configuration to the profile in the database
+                await window.electron.saveProfile(currentProfile.id, configText);
+                console.log('Configuration saved to profile successfully');
+              } else {
+                console.warn('Could not find current profile for path:', configPath);
+              }
+            } catch (profileErr) {
+              console.error('Error saving to profile:', profileErr);
+              // Continue even if saving to profile fails
+            }
             
             // Reload the configuration
             await loadConfigFromContent(configText, currentFilePath);
@@ -422,13 +758,22 @@ const ConfigEditor: React.FC = () => {
             </button>
             <button
               onClick={async () => {
-                if (!isElectronAvailable || !currentFilePath) {
+                if (!isElectronAvailable) {
+                  setMessage('❌ Cannot backup: Electron API not available');
+                  return;
+                }
+                
+                if (!currentFilePath) {
                   setMessage('❌ Cannot backup: No file is currently loaded');
                   return;
                 }
                 
                 try {
-                  const result = await window.electron.createBackup(currentFilePath);
+                  // Ensure we're using the current config path from settings
+                  const settings = await window.electron.loadSettings();
+                  const pathToBackup = settings && settings.configPath ? settings.configPath : currentFilePath;
+                  
+                  const result = await window.electron.createBackup(pathToBackup);
                   if (result.success) {
                     setMessage(`✓ Backup created successfully at ${result.backupFilePath}`);
                   } else {

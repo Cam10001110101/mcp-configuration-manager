@@ -1,4 +1,4 @@
-# MCP Configuration Manager
+# <img src="assets/configurator-icon1.png" alt="MCP Configuration Manager Icon" width="32" height="32"> MCP Configuration Manager
 
 A powerful desktop application for managing Model Context Protocol (MCP) server configurations with an intuitive user interface.
 

@@ -237,9 +237,7 @@ const ProfileManager: React.FC<ProfileManagerProps> = ({ onMessage, onProfileSwi
                                         ×
                                     </button>
                                 </div>
-                                <div className="text-xs text-gray-400 truncate">
-                                    {profile.config_path}
-                                </div>
+                                {/* Path removed as per user request */}
                             </div>
                         ))}
                     </div>

@@ -154,23 +154,6 @@ ipcMain.handle('switch-profile', async (_, id) => {
       if (!backupResult.success) {
         throw new Error(`Failed to create backup: ${backupResult.error}`);
       }
-
-      // Read the existing configuration to preserve any servers
-      try {
-        const existingContent = await fs.readFile(profile.config_path, 'utf-8');
-        const existingConfig = JSON.parse(existingContent);
-        
-        // If the existing config has servers and the new one is empty, preserve the existing servers
-        if (existingConfig.mcpServers && 
-            Object.keys(existingConfig.mcpServers).length > 0 && 
-            Object.keys(configObject.mcpServers).length === 0) {
-          console.log('Preserving existing servers in configuration');
-          configObject.mcpServers = existingConfig.mcpServers;
-        }
-      } catch (readErr) {
-        console.warn('Could not read existing configuration:', readErr);
-        // Continue with the new configuration
-      }
     }
 
     // Ensure the config directory exists
@@ -190,9 +173,6 @@ ipcMain.handle('switch-profile', async (_, id) => {
 
     // Update preferences
     await savePreferences({ lastOpenedFile: profile.config_path });
-
-    // Save the updated configuration back to the profile
-    profileDb.saveConfiguration(id, finalContent);
 
     return { success: true };
   } catch (err: any) {
@@ -473,13 +453,16 @@ ipcMain.handle('restart-claude', async () => {
       if (process.platform === 'win32') {
         // Windows: Check common installation locations
         const possiblePaths = [
+          path.join(app.getPath('appData'), '..', 'Local', 'AnthropicClaude', 'Claude.exe'),
           path.join(app.getPath('appData'), '..', 'Local', 'Programs', 'Claude', 'Claude.exe'),
           path.join('C:', 'Program Files', 'Claude', 'Claude.exe'),
           path.join('C:', 'Program Files (x86)', 'Claude', 'Claude.exe')
         ];
         
         for (const p of possiblePaths) {
+          console.log('Checking Claude path:', p);
           if (fsSync.existsSync(p)) {
+            console.log('Found Claude at:', p);
             claudePath = p;
             break;
           }
@@ -543,6 +526,41 @@ ipcMain.handle('restart-claude', async () => {
   }
 });
 
+// Function to check if a port is in use
+async function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const tester = net.createServer()
+      .once('error', () => {
+        // Port is in use
+        resolve(true);
+      })
+      .once('listening', () => {
+        // Port is free, but we need to close the server
+        tester.close(() => {
+          resolve(false);
+        });
+      })
+      .listen(port, '127.0.0.1');
+  });
+}
+
+// Function to wait until a port is in use (server is listening)
+async function waitForPort(port: number, timeout: number = 10000): Promise<boolean> {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < timeout) {
+    const inUse = await isPortInUse(port);
+    if (inUse) {
+      return true;
+    }
+    // Wait a bit before checking again
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  
+  return false;
+}
+
 // Handle launching an inspector
 ipcMain.handle('launch-inspector', async (_, { serverName, serverConfig }) => {
   try {
@@ -555,27 +573,61 @@ ipcMain.handle('launch-inspector', async (_, { serverName, serverConfig }) => {
       };
     }
     
-    // Generate a random port between 9000-9999
-    const port = Math.floor(Math.random() * 1000) + 9000;
-    const url = `http://localhost:${port}`;
+    // For Chrome DevTools Protocol, use a random port to avoid conflicts
+    // Generate a random port between 10000-60000
+    const cdpPort = Math.floor(Math.random() * 50000) + 10000;
+    
+    // For the web interface, use a different port
+    const webPort = 9810;
+    
+    // Create URLs for both the Chrome DevTools Protocol and the web interface
+    const cdpUrl = `chrome-devtools://devtools/bundled/js_app.html?experiments=true&v8only=true&ws=localhost:${cdpPort}/`;
+    const webUrl = `http://localhost:${webPort}`;
+    
+    // We'll try both URLs, but prefer the web interface if it's available
+    let primaryUrl = webUrl;
+    
+    console.log(`[Inspector] Launching inspector for ${serverName}`);
+    console.log(`[Inspector] CDP URL: ${cdpUrl}`);
+    console.log(`[Inspector] Web URL: ${webUrl}`);
     
     // Prepare environment variables
     const env = {
       ...process.env,
       ...serverConfig.env,
-      MCP_INSPECTOR_PORT: port.toString()
+      // Set various environment variables that might be used by the server
+      MCP_INSPECTOR_PORT: webPort.toString(),
+      PORT: webPort.toString(),
+      INSPECTOR_PORT: webPort.toString(),
+      NODE_OPTIONS: `--inspect=${cdpPort}` // This will make Node.js listen on the CDP port
     };
     
+    // Prepare arguments
+    const inspectorArgs = [...serverConfig.args];
+    
+    // Add --inspect flag if not already present (some servers might use this directly)
+    if (!inspectorArgs.includes('--inspect')) {
+      inspectorArgs.push('--inspect');
+    }
+    
+    // Add port argument if not already specified
+    if (!inspectorArgs.some(arg => arg.includes('--port'))) {
+      inspectorArgs.push(`--port=${webPort}`);
+    }
+    
+    console.log(`[Inspector] Launching with command: ${serverConfig.command} ${inspectorArgs.join(' ')}`);
+    console.log(`[Inspector] Environment: NODE_OPTIONS=${env.NODE_OPTIONS}`);
+    
     // Launch the inspector process
-    const inspectorProcess = spawn(serverConfig.command, [...serverConfig.args, '--inspect'], {
+    const inspectorProcess = spawn(serverConfig.command, inspectorArgs, {
       env,
       stdio: 'pipe'
     });
     
-    // Store the process
+    // Store the process with both URLs
     inspectorProcesses[serverName] = {
       process: inspectorProcess,
-      url
+      url: primaryUrl
     };
     
     // Handle process exit
@@ -591,17 +643,75 @@ ipcMain.handle('launch-inspector', async (_, { serverName, serverConfig }) => {
     
     // Log stdout and stderr
     inspectorProcess.stdout.on('data', (data) => {
-      console.log(`[${serverName}] ${data}`);
+      const output = data.toString();
+      console.log(`[${serverName}] ${output}`);
+      
+      // Check if the output contains a URL (some servers output their URL)
+      const urlMatch = output.match(/(https?:\/\/[^\s]+)/);
+      if (urlMatch && urlMatch[1]) {
+        // Update the URL if found in the output
+        inspectorProcesses[serverName].url = urlMatch[1];
+        console.log(`[Inspector] Found URL in output: ${urlMatch[1]}`);
+        primaryUrl = urlMatch[1];
+      }
+      
+      // Check for Debugger listening message
+      if (output.includes('Debugger listening on')) {
+        const debuggerMatch = output.match(/Debugger listening on (ws:\/\/[^\s]+)/);
+        if (debuggerMatch && debuggerMatch[1]) {
+          const wsUrl = debuggerMatch[1];
+          console.log(`[Inspector] Found debugger WebSocket URL: ${wsUrl}`);
+          // Extract the port from the WebSocket URL
+          const wsPortMatch = wsUrl.match(/:(\d+)\//);
+          if (wsPortMatch && wsPortMatch[1]) {
+            const wsPort = wsPortMatch[1];
+            // Update the Chrome DevTools URL with the actual port
+            const newCdpUrl = `chrome-devtools://devtools/bundled/js_app.html?experiments=true&v8only=true&ws=localhost:${wsPort}/`;
+            console.log(`[Inspector] Updated CDP URL: ${newCdpUrl}`);
+            // If we haven't found a web URL yet, use the CDP URL
+            if (primaryUrl === webUrl) {
+              primaryUrl = newCdpUrl;
+              inspectorProcesses[serverName].url = primaryUrl;
+            }
+          }
+        }
+      }
     });
     
     inspectorProcess.stderr.on('data', (data) => {
-      console.error(`[${serverName}] ${data}`);
+      const output = data.toString();
+      console.error(`[${serverName}] ${output}`);
+      
+      // Also check stderr for debugger messages
+      if (output.includes('Debugger listening on')) {
+        const debuggerMatch = output.match(/Debugger listening on (ws:\/\/[^\s]+)/);
+        if (debuggerMatch && debuggerMatch[1]) {
+          const wsUrl = debuggerMatch[1];
+          console.log(`[Inspector] Found debugger WebSocket URL in stderr: ${wsUrl}`);
+          // Extract the port from the WebSocket URL
+          const wsPortMatch = wsUrl.match(/:(\d+)\//);
+          if (wsPortMatch && wsPortMatch[1]) {
+            const wsPort = wsPortMatch[1];
+            // Update the Chrome DevTools URL with the actual port
+            const newCdpUrl = `chrome-devtools://devtools/bundled/js_app.html?experiments=true&v8only=true&ws=localhost:${wsPort}/`;
+            console.log(`[Inspector] Updated CDP URL: ${newCdpUrl}`);
+            // If we haven't found a web URL yet, use the CDP URL
+            if (primaryUrl === webUrl) {
+              primaryUrl = newCdpUrl;
+              inspectorProcesses[serverName].url = primaryUrl;
+            }
+          }
+        }
+      }
     });
     
-    // Wait a bit for the server to start
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Wait a bit for the server to start and for us to capture any URLs from the output
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
-    return { success: true, url, serverName };
+    // Update the URL in case it was changed by the output parsing
+    inspectorProcesses[serverName].url = primaryUrl;
+    
+    return { success: true, url: primaryUrl, serverName };
   } catch (err: any) {
     console.error('Error launching inspector:', err);
     return { success: false, error: err.message, serverName };
@@ -639,7 +749,36 @@ ipcMain.handle('get-inspector-status', async () => {
 // Handle opening inspector URL
 ipcMain.handle('open-inspector-url', async (_, { url }) => {
   try {
+    console.log(`[Inspector] Attempting to open URL: ${url}`);
+    
+    // For Chrome DevTools Protocol URLs, we need to use a different approach
+    if (url.startsWith('chrome-devtools://')) {
+      console.log(`[Inspector] Opening Chrome DevTools URL: ${url}`);
+      
+      // On Windows, we can use the start command to open the URL
+      if (process.platform === 'win32') {
+        const startProcess = spawn('start', [url], { 
+          shell: true, 
+          detached: true,
+          stdio: 'ignore'
+        });
+        startProcess.unref();
+      } else {
+        // On macOS and Linux, we can use the open command
+        const openProcess = spawn('open', [url], {
+          detached: true,
+          stdio: 'ignore'
+        });
+        openProcess.unref();
+      }
+      
+      return { success: true };
+    }
+    
+    // For regular HTTP URLs, we can use shell.openExternal
+    console.log(`[Inspector] Opening external URL: ${url}`);
     await shell.openExternal(url);
+    
     return { success: true };
   } catch (err) {
     console.error('Error opening URL:', err);

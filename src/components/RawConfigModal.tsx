@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface RawConfigModalProps {
     isOpen: boolean;
@@ -17,6 +17,51 @@ const RawConfigModal: React.FC<RawConfigModalProps> = ({
 }) => {
     const [configText, setConfigText] = useState(initialConfig);
     const [isLoading, setIsLoading] = useState(false);
+    
+    // Load configuration directly from file when modal opens
+    useEffect(() => {
+        if (isOpen) {
+            console.log('RawConfigModal: Modal opened, loading configuration directly');
+            setIsLoading(true);
+            
+            const loadConfig = async () => {
+                try {
+                    // First set the initialConfig as a fallback
+                    setConfigText(initialConfig);
+                    
+                    // Try to load settings to get the current config path
+                    if (window.electron && window.electron.loadSettings) {
+                        const settings = await window.electron.loadSettings();
+                        console.log('Settings loaded:', settings);
+                        
+                        if (settings && settings.configPath) {
+                            // Load the configuration file directly
+                            console.log('Loading configuration from path:', settings.configPath);
+                            const result = await window.electron.loadConfigByPath(settings.configPath);
+                            
+                            if (result && result.content) {
+                                console.log('Configuration loaded successfully:', result.content);
+                                setConfigText(result.content);
+                            } else {
+                                console.warn('No content returned from loadConfigByPath');
+                            }
+                        } else {
+                            console.warn('No configPath found in settings');
+                        }
+                    } else {
+                        console.warn('Electron API not available or loadSettings not defined');
+                    }
+                } catch (err) {
+                    console.error('Error loading configuration:', err);
+                    onMessage(`❌ Error loading configuration: ${err}`);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            loadConfig();
+        }
+    }, [isOpen, initialConfig, onMessage]);
     const [validationError, setValidationError] = useState<string | null>(null);
 
     const handleSave = async () => {
